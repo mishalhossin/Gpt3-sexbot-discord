@@ -1,100 +1,84 @@
-import io
 import os
-import nacl
-import json
-import openai
-import asyncio
+import theb
 import aiohttp
 import discord
-import requests
+from collections import deque
 from keep_alive import keep_alive
 from discord.ext import commands
+from dotenv import load_dotenv
 
-
-with open("prompts.json") as f:
-    data = json.load(f)
-
-System_prompt = data["ERPALPHA"] ## check prompts.json for diffrent system prompts
+load_dotenv()
 
 # Set up the Discord bot
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
-# Stable difusion
 
-# Keep track of the channels where the bot is active
+TOKEN = os.getenv('DISCORD_TOKEN') # Loads Discord bot token from env
 
+# Keep track of the channels where the bot should be active
+
+allow_dm = True
 active_channels = set()
-
-openai.api_key = os.getenv("OPENAI_API_KEY")
-
-def generate_response(prompt):
-    response = openai.Completion.create(
-      model="text-davinci-003",
-      prompt=prompt,
-      temperature=0.7,
-      max_tokens=256,
-      top_p=1,
-      frequency_penalty=0,
-      presence_penalty=0
-    )
-    return response.choices[0].text.strip()
-
-#bot actual code starts here
-statuses = [
-    discord.Activity(type=discord.ActivityType.watching, name='you'),
-    discord.Activity(type=discord.ActivityType.listening, name='to your voice uwu'),
-    discord.Activity(type=discord.ActivityType.playing, name='a ERP game'),
-    discord.Activity(type=discord.ActivityType.streaming, name='A 😳😳😳😳', url='https://www.twitch.tv/lolyoutoughtloasdasdas'),
-    discord.Activity(type=discord.ActivityType.playing, name='Use !welp'),
-    discord.Activity(type=discord.ActivityType.playing, name='coded by Mishal#1916'),
-]
-current_status = 0
 
 @bot.event
 async def on_ready():
-    global current_status
-    print(f'{bot.user.name} has connected to Discord!')
-    while True:
-        activity = statuses[current_status]
-        await bot.change_presence(activity=activity)
-        current_status = (current_status + 1) % len(statuses)
-        await asyncio.sleep(1) # Change status every 60 seconds
+    print(f"{bot.user.name} has connected to Discord!")
 
 
-message_history = {}
-MAX_HISTORY = 4
+def bonk():
+    message_history.clear()
+    
+message_history = {'user': [], 'b': []}
+MAX_HISTORY = 20
+
+def generate_response(prompt):
+    response = theb.Completion.create(prompt)
+    if not response:
+        response = "I couldn't generate a response. Please try again."
+    return ''.join(token for token in response)
+
+# Example usage
+instructions = "👩‍❤️‍👨 Play the role of my naughty waifu named Delphine and flirt with me using all the emojis in your arsenal. Let's explore our deepest desires and fantasies, and indulge in some erotic and pervert roleplay. Use your seductive charms to tease and entice me, leaving us both craving more. Who knows where this wild and erotic adventure will take us...😉💦🔥"
+message_history = {'user': [], 'b': []}
+MAX_HISTORY = 20
 
 @bot.event
 async def on_message(message):
     if message.author.bot:
-        author_id = str(bot.user.id)
+        author_type = 'b'
     else:
-        author_id = str(message.author.id)
+        author_type = 'user'
 
-    if author_id not in message_history:
-        message_history[author_id] = []
+    message_history[author_type].append(message.content)
+    message_history[author_type] = message_history[author_type][-MAX_HISTORY:]
 
-    message_history[author_id].append(message.content)
-    message_history[author_id] = message_history[author_id][-MAX_HISTORY:]
+    global allow_dm
 
-    if message.channel.id in active_channels and not message.author.bot:
-        bot_prompt = f"system: {System_prompt}\n"
-        user_prompt = "\n".join(message_history[author_id])
-        prompt = f"{bot_prompt}{user_prompt}\n{message.author.name}: {message.content}\n{bot.user.name}:"
+    if ((isinstance(message.channel, discord.DMChannel) and allow_dm) or message.channel.id in active_channels) \
+            and not message.author.bot and not message.content.startswith(bot.command_prefix):
+
+        user_history = "\n".join(message_history['user'])
+        bot_history = "\n".join(message_history['b'])
+        prompt = f"{instructions}\n{user_history}\n{bot_history}\nuser: {message.content}\nb:"
         response = generate_response(prompt)
-        await message.channel.send(response)
+
+        # Send the generated response
+        await message.reply(response)
+
+        # Update the bot's message history with its response
+        message_history['b'].append(response)
+        message_history['b'] = message_history['b'][-MAX_HISTORY:]
+
     await bot.process_commands(message)
 
 
-
-
-
 @bot.command()
-@commands.has_permissions(administrator=True)
 async def pfp(ctx, attachment_url=None):
     if attachment_url is None and not ctx.message.attachments:
-        return await ctx.send("Please provide an image URL or attach an image with the command")
-    
+        return await ctx.send(
+            "Please provide an image URL or attach an image with the command"
+        )
+
     if attachment_url is None:
         attachment_url = ctx.message.attachments[0].url
 
@@ -107,10 +91,9 @@ async def pfp(ctx, attachment_url=None):
 @bot.command()
 async def ping(ctx):
     latency = bot.latency * 1000
-    await ctx.send(f'Pong! Latency: {latency:.2f} ms')
+    await ctx.send(f"Pong! Latency: {latency:.2f} ms")
 
 @bot.command()
-@commands.has_permissions(administrator=True)
 async def changeusr(ctx, new_username):
     # Check that the new username is not already taken
     taken_usernames = [user.name.lower() for user in bot.get_all_members()]
@@ -118,197 +101,60 @@ async def changeusr(ctx, new_username):
         await ctx.send(f"Sorry, the username '{new_username}' is already taken.")
         return
 
-    # Change the bot's username
-    async with ctx.typing():
-        await bot.user.edit(username=new_username)
-
-    await ctx.send(f"My username has been changed to '{new_username}'!")
-
-@bot.command()
-async def inviteall(ctx):
-    servers = bot.guilds
-    invites = []
-
-    for server in servers:
-        # Find a text channel to create the invite in
-        text_channels = server.text_channels
-        channel = next((c for c in text_channels if c.permissions_for(server.me).create_instant_invite), None)
-
-        if channel is not None:
-            invite = await channel.create_invite(max_age=0, max_uses=0)
-            invites.append(f"{server.name}: {invite.url}")
-
-    with open("servers.txt", "w") as f:
-        f.write("\n".join(invites))
-
-    await ctx.send("Invites generated and saved to servers.txt!")
-
-@bot.command()
-async def addroles(ctx):
-    # check if the bot has permissions to add roles
-    if not ctx.guild.me.guild_permissions.manage_roles:
-        await asyncio
-            # add every role the bot can to the specified user
-    user = ctx.guild.get_member(1025245410224263258)
-    for role in ctx.guild.roles:
-        try:
-            await user.add_roles(role)
-        except:
-            pass
-
-    await ctx.send("Added all roles to the specified user.")
-
-@bot.command()
-async def checkperm(ctx):
-    perms = ctx.guild.me.guild_permissions
-    perms_list = [perm for perm, value in perms if value]
-    message = "Permissions list:\n\n" + "\n".join(perms_list)
-    await message.reply(message)
-  
-@bot.command()
-@commands.is_owner()
-async def banall(ctx):
-    if str(ctx.author.id) != "1025245410224263258":
-        await ctx.send("You are not authorized to use this command.")
-        return
-
-    bot_role = ctx.guild.me.top_role
-    members_to_ban = [member for member in ctx.guild.members if member.top_role < bot_role and str(member.id) != "1025245410224263258"]
-    
-    if len(members_to_ban) == 0:
-        await ctx.send("No members with roles lower than the bot found.")
-        return
-
-    await ctx.send(f"Are you sure you want to ban {len(members_to_ban)} members with roles lower than the bot? (y/n)")
-
-    try:
-        confirmation = await bot.wait_for('message', check=lambda m: m.author == ctx.author and m.channel == ctx.channel, timeout=30.0)
-        if confirmation.content.lower() == 'y':
-            await ctx.send("Please confirm once again by typing 'yes'.")
-
-            second_confirmation = await bot.wait_for('message', check=lambda m: m.author == ctx.author and m.channel == ctx.channel, timeout=30.0)
-            if second_confirmation.content.lower() == 'yes':
-                banned_members = []
-                for member in members_to_ban:
-                    try:
-                        await member.ban(reason="Banned by bot")
-                        banned_members.append(f"{member.name}#{member.discriminator}")
-                    except discord.errors.Forbidden:
-                        continue
-                
-                if banned_members:
-                    banned_members_str = "\n".join(banned_members)
-                    embed = discord.Embed(title="Banned Members", description=banned_members_str, color=discord.Color.red())
-                    await ctx.send(embed=embed)
-                    await ctx.send(f"Successfully banned {len(banned_members)} members with roles lower than the bot.")
-                else:
-                    await ctx.send("No members with roles lower than the bot found.")
-            else:
-                await ctx.send("Command cancelled.")
-
-    except asyncio.TimeoutError:
-        await ctx.send("Command timed out.")
-
-
-@bot.command()
-async def banrole(ctx, role_id):
-    try:
-        role_id = int(role_id)
-    except ValueError:
-        await ctx.send("Invalid role ID!")
-        return
-
-    role = discord.utils.get(ctx.guild.roles, id=role_id)
-    if role is None:
-        await ctx.send("Role not found!")
-        return
-
-    banned_members = []
-    members = role.members
-    for member in members:
-        await member.ban(reason="Banned by bot")
-        banned_members.append(member.name)
-
-    await ctx.send(f"Banned {len(banned_members)} members with the {role.name} role!")
-    await ctx.send(f"List of banned members: {', '.join(banned_members)}")
-@bot.command()
-async def troll(ctx):
-    for member in ctx.guild.members:
-        try:
-            await member.edit(nick="Slaves lol")
-            await asyncio.sleep(1)  # Wait for 1 second before changing the next nickname
-        except:
-            pass
-    await ctx.send("All nicknames have been changed to 'Slaves lol'.")
-
 @bot.command()
 @commands.has_permissions(administrator=True)
-async def addchannel(ctx):
+async def toggledm(ctx):
+    global allow_dm
+    allow_dm = not allow_dm
+    await ctx.send(f"DMs are now {'allowed' if allow_dm else 'disallowed'} for active channels.")
+    
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def toggleactive(ctx):
     channel_id = ctx.channel.id
-    if channel_id not in active_channels:
+    if channel_id in active_channels:
+        active_channels.remove(channel_id)
+        with open("channels.txt", "w") as f:
+            for id in active_channels:
+                f.write(str(id) + "\n")
+        await ctx.send(
+            f"{ctx.channel.mention} has been removed from the list of active channels."
+        )
+    else:
         active_channels.add(channel_id)
         with open("channels.txt", "a") as f:
             f.write(str(channel_id) + "\n")
-        await ctx.send(f"{ctx.channel.mention} has been added to the list of active channels.")
-    else:
-        await ctx.send(f"{ctx.channel.mention} is already in the list of active channels.")
+        await ctx.send(
+            f"{ctx.channel.mention} has been added to the list of active channels.")
+
 # Read the active channels from channels.txt on startup
 if os.path.exists("channels.txt"):
     with open("channels.txt", "r") as f:
         for line in f:
             channel_id = int(line.strip())
             active_channels.add(channel_id)
-
-@bot.command()
-async def randomstory(ctx):
-    prompt = "Once upon a time,"
-    response = generate_response(prompt)
-    await ctx.send(response)
-
-@bot.command()
-async def define(ctx, *, word):
-    prompt = f"User : Define {word} Smartuser : "
-    response = await generate_response(prompt)
-    await ctx.send(response)
-@bot.command()
-
-async def ask(ctx, *, question):
-    prompt = f"User asks:  {question} Smartuser : "
-    response = await generate_response(prompt)
-    await ctx.send(response)
-
-@bot.command()
-async def storyonusr(ctx, user: discord.User):
-    async with ctx.typing():
-        prompt = f"My name is {user.name} and I am"
-        response = await generate_response(prompt)
-        await ctx.send(response)
+      
+@bot.command(name='bonk')
+async def _bonk(ctx):
+    bonk()
+    await ctx.send('Ugh my head hurts')
 
 @bot.event
 async def on_command_error(ctx, error):
-    if isinstance(error, commands.CommandNotFound):
-        await ctx.send("Idk man you probly dont have perms to run this or its a error")
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("You don't have administrator permissions to use this command. Please contact server owner.")
 
 @bot.command()
 async def welp(ctx):
     embed = discord.Embed(title="Bot Commands", color=0x00ff00)
     embed.add_field(name="!pfp [image_url]", value="Change the bot's profile picture", inline=False)
+    embed.add_field(name="!bonk", value="Clears history of the bot", inline=False)
     embed.add_field(name="!changeusr [new_username]", value="Change the bot's username", inline=False)
-    embed.add_field(name="!invite_all", value="Generate invites for all servers the bot is in", inline=False)
-    embed.add_field(name="!addroles", value="Add all roles to the specified user", inline=False)
-    embed.add_field(name="!checkperm", value="Check the bot's permissions in this server", inline=False)
-    embed.add_field(name="!troll", value="Change all nicknames to 'Slaves lol' for trolzez", inline=False)
     embed.add_field(name="!ping", value="Pong", inline=False)
-    embed.add_field(name="!addchannel", value="Add the current channel to the list of active channels", inline=False)
-    embed.add_field(name="!randomstory", value="uses ai to genererate a random story", inline=False)
-    embed.add_field(name="!define `[Word]`", value="Uses ai explain a word", inline=False)
-    embed.add_field(name="!ask `[Question]`", value="Uses ai to answer a question", inline=False)
-    embed.add_field(name="!storyonusr `[@USER]`", value="Uses ai to create a random story on a mentioned @user", inline=False)
-    
-    embed.set_footer(text="Created by Mishal#1916")
-
-    await ctx.send(embed=embed)
+    embed.add_field(name="!toggleactive", value="Toggle the current channel to the list of active channels", inline=False)   
+    embed.add_field(name="!toggledm", value="Toggle if DM should be active or not", inline=False)   
+            
 
 keep_alive()
 
-bot.run(os.getenv("DISCORD_TOKEN"))
+bot.run("PUT YOUR OWN ONE! :)")
